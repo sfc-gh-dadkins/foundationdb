@@ -478,4 +478,4 @@ struct MachineAttritionWorkload : FailureInjectionWorkload {
 };
 
 WorkloadFactory<MachineAttritionWorkload> MachineAttritionWorkloadFactory("Attrition");
-FailureInjectorFactory<MachineAttritionWorkload> MachineAttritionFailureWorkloadFactory;
+//FailureInjectorFactory<MachineAttritionWorkload> MachineAttritionFailureWorkloadFactory;
