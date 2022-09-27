@@ -19,6 +19,7 @@
  */
 
 #include <cinttypes>
+#include "fdbclient/BackupAgent.actor.h"
 #include "fmt/format.h"
 #include "fdbclient/BlobWorkerInterface.h"
 #include "fdbclient/KeyBackedTypes.h"
@@ -284,10 +285,20 @@ static JsonBuilderObject getError(const TraceEventFields& errorFields) {
 	return statusObj;
 }
 
-static JsonBuilderObject machineStatusFetcher(WorkerEvents mMetrics,
-                                              std::vector<WorkerDetails> workers,
-                                              Optional<DatabaseConfiguration> configuration,
-                                              std::set<std::string>* incomplete_reasons) {
+namespace {
+
+void reportCgroupCpuStat(JsonBuilderObject& object, const TraceEventFields& eventFields) {
+	JsonBuilderObject cgroupCpuStatObj;
+	cgroupCpuStatObj.setKeyRawNumber("nr_periods", eventFields.getValue("NrPeriods"));
+	cgroupCpuStatObj.setKeyRawNumber("nr_throttled", eventFields.getValue("NrThrottled"));
+	cgroupCpuStatObj.setKeyRawNumber("throttled_time", eventFields.getValue("ThrottledTime"));
+	object["cgroup_cpu_stat"] = cgroupCpuStatObj;
+}
+
+JsonBuilderObject machineStatusFetcher(WorkerEvents mMetrics,
+                                       std::vector<WorkerDetails> workers,
+                                       Optional<DatabaseConfiguration> configuration,
+                                       std::set<std::string>* incomplete_reasons) {
 	JsonBuilderObject machineMap;
 	double metric;
 	int failed = 0;
@@ -338,6 +349,10 @@ static JsonBuilderObject machineStatusFetcher(WorkerEvents mMetrics,
 				memoryObj.setKeyRawNumber("committed_bytes", event.getValue("CommittedMemory"));
 				memoryObj.setKeyRawNumber("free_bytes", event.getValue("AvailableMemory"));
 				statusObj["memory"] = memoryObj;
+
+#ifdef __linux__
+				reportCgroupCpuStat(statusObj, event);
+#endif // __linux__
 
 				JsonBuilderObject cpuObj;
 				double cpuSeconds = event.getDouble("CPUSeconds");
@@ -401,6 +416,8 @@ static JsonBuilderObject machineStatusFetcher(WorkerEvents mMetrics,
 
 	return machineMap;
 }
+
+} // anonymous namespace
 
 JsonBuilderObject getLagObject(int64_t versions) {
 	JsonBuilderObject lag;
@@ -1481,11 +1498,15 @@ ACTOR static Future<Void> logRangeWarningFetcher(Database cx,
 					if (loggingRanges.count(LogRangeAndUID(range, logUid))) {
 						std::pair<Key, Key> rangePair = std::make_pair(range.begin, range.end);
 						if (existingRanges.count(rangePair)) {
+							std::string rangeDescription = (range == getDefaultBackupSharedRange())
+							                                   ? "the default backup set"
+							                                   : format("`%s` - `%s`",
+							                                            printable(range.begin).c_str(),
+							                                            printable(range.end).c_str());
 							messages->push_back(JsonString::makeMessage(
 							    "duplicate_mutation_streams",
-							    format("Backup and DR are not sharing the same stream of mutations for `%s` - `%s`",
-							           printable(range.begin).c_str(),
-							           printable(range.end).c_str())
+							    format("Backup and DR are not sharing the same stream of mutations for %s",
+							           rangeDescription.c_str())
 							        .c_str()));
 							break;
 						}

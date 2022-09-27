@@ -459,7 +459,7 @@ public:
 
 		if (!it.is_unreadable() && !it.is_unknown_range() && key.offset > 1) {
 			*readThroughEnd = true;
-			key.setKey(maxKey); // maxKey is a KeyRef, but points to a LiteralStringRef. TODO: how can we ASSERT this?
+			key.setKey(maxKey); // maxKey is a KeyRef, but points to a literal. TODO: how can we ASSERT this?
 			key.offset = 1;
 			return;
 		}
@@ -1840,6 +1840,13 @@ Future<Standalone<VectorRef<BlobGranuleSummaryRef>>> ReadYourWritesTransaction::
 		return key_outside_legal_range();
 
 	return waitOrError(tr.summarizeBlobGranules(range, summaryVersion, rangeLimit), resetPromise.getFuture());
+}
+
+void ReadYourWritesTransaction::addGranuleMaterializeStats(const GranuleMaterializeStats& stats) {
+	if (checkUsedDuringCommit()) {
+		throw used_during_commit();
+	}
+	tr.addGranuleMaterializeStats(stats);
 }
 
 void ReadYourWritesTransaction::addReadConflictRange(KeyRangeRef const& keys) {
