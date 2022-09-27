@@ -159,46 +159,39 @@ FDB_DECLARE_BOOLEAN_PARAM(UnlimitedCommitBytes);
 FDB_DEFINE_BOOLEAN_PARAM(UnlimitedCommitBytes);
 
 // Immutable
-static const KeyValueRef persistFormat(LiteralStringRef(PERSIST_PREFIX "Format"), "FoundationDB/StorageServer/1/4"_sr);
-static const KeyValueRef persistShardAwareFormat(LiteralStringRef(PERSIST_PREFIX "Format"),
-                                                 "FoundationDB/StorageServer/1/5"_sr);
+static const KeyValueRef persistFormat(PERSIST_PREFIX "Format"_sr, "FoundationDB/StorageServer/1/4"_sr);
+static const KeyValueRef persistShardAwareFormat(PERSIST_PREFIX "Format"_sr, "FoundationDB/StorageServer/1/5"_sr);
 static const KeyRangeRef persistFormatReadableRange("FoundationDB/StorageServer/1/2"_sr,
                                                     "FoundationDB/StorageServer/1/6"_sr);
-static const KeyRef persistID = LiteralStringRef(PERSIST_PREFIX "ID");
-static const KeyRef persistTssPairID = LiteralStringRef(PERSIST_PREFIX "tssPairID");
-static const KeyRef persistSSPairID = LiteralStringRef(PERSIST_PREFIX "ssWithTSSPairID");
-static const KeyRef persistTssQuarantine = LiteralStringRef(PERSIST_PREFIX "tssQ");
-static const KeyRef persistClusterIdKey = LiteralStringRef(PERSIST_PREFIX "clusterId");
+static const KeyRef persistID = PERSIST_PREFIX "ID"_sr;
+static const KeyRef persistTssPairID = PERSIST_PREFIX "tssPairID"_sr;
+static const KeyRef persistSSPairID = PERSIST_PREFIX "ssWithTSSPairID"_sr;
+static const KeyRef persistTssQuarantine = PERSIST_PREFIX "tssQ"_sr;
+static const KeyRef persistClusterIdKey = PERSIST_PREFIX "clusterId"_sr;
 
 // (Potentially) change with the durable version or when fetchKeys completes
-static const KeyRef persistVersion = LiteralStringRef(PERSIST_PREFIX "Version");
+static const KeyRef persistVersion = PERSIST_PREFIX "Version"_sr;
 static const KeyRangeRef persistShardAssignedKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "ShardAssigned/"), LiteralStringRef(PERSIST_PREFIX "ShardAssigned0"));
+    KeyRangeRef(PERSIST_PREFIX "ShardAssigned/"_sr, PERSIST_PREFIX "ShardAssigned0"_sr);
 static const KeyRangeRef persistShardAvailableKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "ShardAvailable/"), LiteralStringRef(PERSIST_PREFIX "ShardAvailable0"));
-static const KeyRangeRef persistByteSampleKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "BS/"), LiteralStringRef(PERSIST_PREFIX "BS0"));
+    KeyRangeRef(PERSIST_PREFIX "ShardAvailable/"_sr, PERSIST_PREFIX "ShardAvailable0"_sr);
+static const KeyRangeRef persistByteSampleKeys = KeyRangeRef(PERSIST_PREFIX "BS/"_sr, PERSIST_PREFIX "BS0"_sr);
 static const KeyRangeRef persistByteSampleSampleKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "BS/" PERSIST_PREFIX "BS/"),
-                LiteralStringRef(PERSIST_PREFIX "BS/" PERSIST_PREFIX "BS0"));
-static const KeyRef persistLogProtocol = LiteralStringRef(PERSIST_PREFIX "LogProtocol");
-static const KeyRef persistPrimaryLocality = LiteralStringRef(PERSIST_PREFIX "PrimaryLocality");
-static const KeyRangeRef persistChangeFeedKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "CF/"), LiteralStringRef(PERSIST_PREFIX "CF0"));
-static const KeyRangeRef persistTenantMapKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "TM/"), LiteralStringRef(PERSIST_PREFIX "TM0"));
+    KeyRangeRef(PERSIST_PREFIX "BS/"_sr PERSIST_PREFIX "BS/"_sr, PERSIST_PREFIX "BS/"_sr PERSIST_PREFIX "BS0"_sr);
+static const KeyRef persistLogProtocol = PERSIST_PREFIX "LogProtocol"_sr;
+static const KeyRef persistPrimaryLocality = PERSIST_PREFIX "PrimaryLocality"_sr;
+static const KeyRangeRef persistChangeFeedKeys = KeyRangeRef(PERSIST_PREFIX "CF/"_sr, PERSIST_PREFIX "CF0"_sr);
+static const KeyRangeRef persistTenantMapKeys = KeyRangeRef(PERSIST_PREFIX "TM/"_sr, PERSIST_PREFIX "TM0"_sr);
 // data keys are unmangled (but never start with PERSIST_PREFIX because they are always in allKeys)
 
 static const KeyRangeRef persistStorageServerShardKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "StorageServerShard/"),
-                LiteralStringRef(PERSIST_PREFIX "StorageServerShard0"));
+    KeyRangeRef(PERSIST_PREFIX "StorageServerShard/"_sr, PERSIST_PREFIX "StorageServerShard0"_sr);
 
 // Checkpoint related prefixes.
 static const KeyRangeRef persistCheckpointKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "Checkpoint/"), LiteralStringRef(PERSIST_PREFIX "Checkpoint0"));
+    KeyRangeRef(PERSIST_PREFIX "Checkpoint/"_sr, PERSIST_PREFIX "Checkpoint0"_sr);
 static const KeyRangeRef persistPendingCheckpointKeys =
-    KeyRangeRef(LiteralStringRef(PERSIST_PREFIX "PendingCheckpoint/"),
-                LiteralStringRef(PERSIST_PREFIX "PendingCheckpoint0"));
+    KeyRangeRef(PERSIST_PREFIX "PendingCheckpoint/"_sr, PERSIST_PREFIX "PendingCheckpoint0"_sr);
 static const std::string rocksdbCheckpointDirPrefix = "/rockscheckpoints_";
 
 struct AddingShard : NonCopyable {
@@ -2929,49 +2922,6 @@ ACTOR Future<std::pair<ChangeFeedStreamReply, bool>> getChangeFeedMutations(Stor
 	return std::make_pair(reply, gotAll);
 }
 
-ACTOR Future<Void> localChangeFeedStream(StorageServer* data,
-                                         PromiseStream<Standalone<MutationsAndVersionRef>> results,
-                                         Key rangeID,
-                                         Version begin,
-                                         Version end,
-                                         KeyRange range) {
-	try {
-		loop {
-			state ChangeFeedStreamRequest feedRequest;
-			feedRequest.rangeID = rangeID;
-			feedRequest.begin = begin;
-			feedRequest.end = end;
-			feedRequest.range = range;
-			state std::pair<ChangeFeedStreamReply, bool> feedReply =
-			    wait(getChangeFeedMutations(data, feedRequest, true, false, UID()));
-			begin = feedReply.first.mutations.back().version + 1;
-			state int resultLoc = 0;
-			while (resultLoc < feedReply.first.mutations.size()) {
-				if (feedReply.first.mutations[resultLoc].mutations.size() ||
-				    feedReply.first.mutations[resultLoc].version == end - 1) {
-					wait(results.onEmpty());
-					results.send(feedReply.first.mutations[resultLoc]);
-				}
-				resultLoc++;
-			}
-
-			if (begin == end) {
-				return Void();
-			}
-		}
-	} catch (Error& e) {
-		if (e.code() == error_code_unknown_change_feed) {
-			CODE_PROBE(true, "CF was moved away, no more local data to merge with");
-			// Send endVersion so local stream is effectively done. We couldn't have send that already, because that
-			// would mean the stream would have finished without error
-			results.send(MutationsAndVersionRef(end, invalidVersion));
-		} else {
-			TraceEvent(SevError, "LocalChangeFeedError", data->thisServerID).error(e).detail("CFID", rangeID);
-		}
-		throw;
-	}
-}
-
 // Change feed stream must be sent an error as soon as it is moved away, or change feed can get incorrect results
 ACTOR Future<Void> stopChangeFeedOnMove(StorageServer* data, ChangeFeedStreamRequest req, UID streamUID) {
 	auto feed = data->uidChangeFeed.find(req.rangeID);
@@ -3010,8 +2960,10 @@ ACTOR Future<Void> changeFeedStreamQ(StorageServer* data, ChangeFeedStreamReques
 		++data->counters.feedStreamQueries;
 
 		// FIXME: do something more sophisticated here besides hard limit
-		if (data->activeFeedQueries >= SERVER_KNOBS->STORAGE_FEED_QUERY_HARD_LIMIT ||
-		    (g_network->isSimulated() && BUGGIFY_WITH_PROB(0.005))) {
+		// Allow other storage servers fetching feeds to go above this limit. currently, req.canReadPopped == read is a
+		// fetch from another ss
+		if (!req.canReadPopped && (data->activeFeedQueries >= SERVER_KNOBS->STORAGE_FEED_QUERY_HARD_LIMIT ||
+		                           (g_network->isSimulated() && BUGGIFY_WITH_PROB(0.005)))) {
 			req.reply.sendError(storage_too_many_feed_streams());
 			++data->counters.rejectedFeedStreamQueries;
 			return Void();
@@ -4837,10 +4789,11 @@ ACTOR Future<Void> getKeyValuesStreamQ(StorageServer* data, GetKeyValuesStreamRe
 
 				// Even if TSS mode is Disabled, this may be the second test in a restarting test where the first run
 				// had it enabled.
-				state int byteLimit = (BUGGIFY && g_simulator->tssMode == ISimulator::TSSMode::Disabled &&
-				                       !data->isTss() && !data->isSSWithTSSPair())
-				                          ? 1
-				                          : CLIENT_KNOBS->REPLY_BYTE_LIMIT;
+				state int byteLimit =
+				    (BUGGIFY && g_network->isSimulated() && g_simulator->tssMode == ISimulator::TSSMode::Disabled &&
+				     !data->isTss() && !data->isSSWithTSSPair())
+				        ? 1
+				        : CLIENT_KNOBS->REPLY_BYTE_LIMIT;
 				TraceEvent(SevDebug, "SSGetKeyValueStreamLimits")
 				    .detail("ByteLimit", byteLimit)
 				    .detail("ReqLimit", req.limit)
@@ -5834,17 +5787,9 @@ ACTOR Future<Version> fetchChangeFeedApplier(StorageServer* data,
 	state Version lastVersion = invalidVersion;
 	state int64_t versionsFetched = 0;
 
-	state PromiseStream<Standalone<MutationsAndVersionRef>> localResults;
+	// ensure SS is at least caught up to begin version, to maintain behavior with old fetch
+	wait(data->version.whenAtLeast(startVersion));
 
-	// Add 1 to fetch version to make sure the local stream will have more versions in the stream than the remote stream
-	// to avoid edge cases in the merge logic
-
-	state Future<Void> localStream =
-	    localChangeFeedStream(data, localResults, rangeId, startVersion, endVersion + 1, range);
-	state Standalone<MutationsAndVersionRef> localResult;
-
-	Standalone<MutationsAndVersionRef> _localResult = waitNext(localResults.getFuture());
-	localResult = _localResult;
 	try {
 		loop {
 			while (data->fetchKeysBudgetUsed.get()) {
@@ -5854,6 +5799,10 @@ ACTOR Future<Version> fetchChangeFeedApplier(StorageServer* data,
 			state Standalone<VectorRef<MutationsAndVersionRef>> remoteResult =
 			    waitNext(feedResults->mutations.getFuture());
 			state int remoteLoc = 0;
+			// ensure SS is at least caught up to begin version, to maintain behavior with old fetch
+			if (!remoteResult.empty()) {
+				wait(data->version.whenAtLeast(remoteResult.back().version));
+			}
 
 			while (remoteLoc < remoteResult.size()) {
 				if (feedResults->popVersion - 1 > changeFeedInfo->emptyVersion) {
@@ -5881,80 +5830,53 @@ ACTOR Future<Version> fetchChangeFeedApplier(StorageServer* data,
 					++data->counters.kvSystemClearRanges;
 				}
 
-				Version localVersion = localResult.version;
 				Version remoteVersion = remoteResult[remoteLoc].version;
-
-				if (remoteVersion <= localVersion) {
-					if (remoteVersion > changeFeedInfo->emptyVersion) {
-						// merge if same version
-						if (remoteVersion == localVersion && remoteResult[remoteLoc].mutations.size() &&
-						    remoteResult[remoteLoc].mutations.back().param1 != lastEpochEndPrivateKey) {
-							int remoteSize = remoteResult[remoteLoc].mutations.size();
-							ASSERT(localResult.mutations.size());
-							remoteResult[remoteLoc].mutations.append(
-							    remoteResult.arena(), localResult.mutations.begin(), localResult.mutations.size());
-							if (MUTATION_TRACKING_ENABLED) {
-								int midx = 0;
-								for (auto& m : remoteResult[remoteLoc].mutations) {
-									DEBUG_MUTATION("ChangeFeedWriteMoveMerge", remoteVersion, m, data->thisServerID)
-									    .detail("Range", range)
-									    .detail("FromLocal", midx >= remoteSize)
-									    .detail("ChangeFeedID", rangeId);
-									midx++;
-								}
-							}
-						} else {
-							if (MUTATION_TRACKING_ENABLED) {
-								for (auto& m : remoteResult[remoteLoc].mutations) {
-									DEBUG_MUTATION("ChangeFeedWriteMove", remoteVersion, m, data->thisServerID)
-									    .detail("Range", range)
-									    .detail("ChangeFeedID", rangeId);
-								}
-							}
-						}
-
-						data->storage.writeKeyValue(
-						    KeyValueRef(changeFeedDurableKey(rangeId, remoteVersion),
-						                changeFeedDurableValue(remoteResult[remoteLoc].mutations,
-						                                       remoteResult[remoteLoc].knownCommittedVersion)));
-						++data->counters.kvSystemClearRanges;
-						changeFeedInfo->fetchVersion = std::max(changeFeedInfo->fetchVersion, remoteVersion);
-
-						if (firstVersion == invalidVersion) {
-							firstVersion = remoteVersion;
-						}
-						lastVersion = remoteVersion;
-						versionsFetched++;
-					} else {
-						CODE_PROBE(true, "Change feed ignoring write on move because it was popped concurrently");
-						if (MUTATION_TRACKING_ENABLED) {
-							for (auto& m : remoteResult[remoteLoc].mutations) {
-								DEBUG_MUTATION("ChangeFeedWriteMoveIgnore", remoteVersion, m, data->thisServerID)
-								    .detail("Range", range)
-								    .detail("ChangeFeedID", rangeId)
-								    .detail("EmptyVersion", changeFeedInfo->emptyVersion);
-							}
-						}
-						if (versionsFetched > 0) {
-							ASSERT(firstVersion != invalidVersion);
-							ASSERT(lastVersion != invalidVersion);
-							data->storage.clearRange(
-							    KeyRangeRef(changeFeedDurableKey(changeFeedInfo->id, firstVersion),
-							                changeFeedDurableKey(changeFeedInfo->id, lastVersion + 1)));
-							++data->counters.kvSystemClearRanges;
-							firstVersion = invalidVersion;
-							lastVersion = invalidVersion;
-							versionsFetched = 0;
+				// ensure SS is at least caught up to this version, to maintain behavior with old fetch
+				ASSERT(remoteVersion <= data->version.get());
+				if (remoteVersion > changeFeedInfo->emptyVersion) {
+					if (MUTATION_TRACKING_ENABLED) {
+						for (auto& m : remoteResult[remoteLoc].mutations) {
+							DEBUG_MUTATION("ChangeFeedWriteMove", remoteVersion, m, data->thisServerID)
+							    .detail("Range", range)
+							    .detail("ChangeFeedID", rangeId);
 						}
 					}
-					remoteLoc++;
+
+					data->storage.writeKeyValue(
+					    KeyValueRef(changeFeedDurableKey(rangeId, remoteVersion),
+					                changeFeedDurableValue(remoteResult[remoteLoc].mutations,
+					                                       remoteResult[remoteLoc].knownCommittedVersion)));
+					++data->counters.kvSystemClearRanges;
+					changeFeedInfo->fetchVersion = std::max(changeFeedInfo->fetchVersion, remoteVersion);
+
+					if (firstVersion == invalidVersion) {
+						firstVersion = remoteVersion;
+					}
+					lastVersion = remoteVersion;
+					versionsFetched++;
+				} else {
+					CODE_PROBE(true, "Change feed ignoring write on move because it was popped concurrently");
+					if (MUTATION_TRACKING_ENABLED) {
+						for (auto& m : remoteResult[remoteLoc].mutations) {
+							DEBUG_MUTATION("ChangeFeedWriteMoveIgnore", remoteVersion, m, data->thisServerID)
+							    .detail("Range", range)
+							    .detail("ChangeFeedID", rangeId)
+							    .detail("EmptyVersion", changeFeedInfo->emptyVersion);
+						}
+					}
+					if (versionsFetched > 0) {
+						ASSERT(firstVersion != invalidVersion);
+						ASSERT(lastVersion != invalidVersion);
+						data->storage.clearRange(
+						    KeyRangeRef(changeFeedDurableKey(changeFeedInfo->id, firstVersion),
+						                changeFeedDurableKey(changeFeedInfo->id, lastVersion + 1)));
+						++data->counters.kvSystemClearRanges;
+						firstVersion = invalidVersion;
+						lastVersion = invalidVersion;
+						versionsFetched = 0;
+					}
 				}
-				if (localVersion <= remoteVersion) {
-					// Do this once per wait instead of once per version for efficiency
-					data->fetchingChangeFeeds.insert(changeFeedInfo->id);
-					Standalone<MutationsAndVersionRef> _localResult = waitNext(localResults.getFuture());
-					localResult = _localResult;
-				}
+				remoteLoc++;
 			}
 			// Do this once per wait instead of once per version for efficiency
 			data->fetchingChangeFeeds.insert(changeFeedInfo->id);
