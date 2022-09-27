@@ -1367,6 +1367,45 @@ public:
 		return primaryTLogsDead || primaryProcessesDead.validate(storagePolicy);
 	}
 
+	// The following function will determine if a machine can be remove in case when it has a blob worker
+	bool canKillMachineWithBlobWorkers(Optional<Standalone<StringRef>> machineId, KillType kt, KillType* ktFinal) {
+		// Allow if no blob workers, or it's a reboot(without removing the machine)
+		if (!blobGranulesEnabled && kt >= RebootAndDelete) {
+			return true;
+		}
+
+		// Allow if the machine doesn't support blob worker
+		MachineInfo& currentMachine = machines[machineId];
+		bool hasBlobWorker = false;
+		for (auto processInfo : currentMachine.processes) {
+			if (processInfo->startingClass == ProcessClass::BlobWorkerClass) {
+				hasBlobWorker = true;
+				break;
+			}
+		}
+		if (!hasBlobWorker)
+			return true;
+
+		// Count # remaining support blob workers in current dc
+		auto currentDcId = currentMachine.machineProcess->locality.dcId();
+		int nLeft = 0;
+		for (auto processInfo : getAllProcesses()) {
+			if (currentDcId != processInfo->locality.dcId() || // skip other dc
+			    processInfo->startingClass != ProcessClass::BlobWorkerClass || // skip non blob workers
+			    processInfo->locality.machineId() == machineId) { // skip current machine
+				continue;
+			}
+			nLeft++; // alive blob workers after killing machineId
+		}
+
+		// Ensure there is at least 1 remaining blob workers after removing current machine
+		if (nLeft <= 1) {
+			*ktFinal = RebootAndDelete; // reboot and delete data, but keep this machine
+			return false;
+		}
+		return true;
+	}
+
 	// The following function will determine if the specified configuration of available and dead processes can allow
 	// the cluster to survive
 	bool canKillProcesses(std::vector<ProcessInfo*> const& availableProcesses,
@@ -1725,15 +1764,20 @@ public:
 
 	void killProcess(ProcessInfo* machine, KillType kt) override {
 		TraceEvent("AttemptingKillProcess").detail("ProcessInfo", machine->toString());
-		if (kt < RebootAndDelete) {
+		// Refuse to kill a protected process.
+		if (kt < RebootAndDelete && protectedAddresses.count(machine->address) == 0) {
 			killProcess_internal(machine, kt);
 		}
 	}
 	void killInterface(NetworkAddress address, KillType kt) override {
 		if (kt < RebootAndDelete) {
 			std::vector<ProcessInfo*>& processes = machines[addressMap[address]->locality.machineId()].processes;
-			for (int i = 0; i < processes.size(); i++)
-				killProcess_internal(processes[i], kt);
+			for (auto& process : processes) {
+				// Refuse to kill a protected process.
+				if (protectedAddresses.count(process->address) == 0) {
+					killProcess_internal(process, kt);
+				}
+			}
 		}
 	}
 	bool killZone(Optional<Standalone<StringRef>> zoneId, KillType kt, bool forceKill, KillType* ktFinal) override {
@@ -1819,6 +1863,14 @@ public:
 		// Check if machine can be removed, if requested
 		if (!forceKill && ((kt == KillInstantly) || (kt == InjectFaults) || (kt == FailDisk) ||
 		                   (kt == RebootAndDelete) || (kt == RebootProcessAndDelete))) {
+
+			if (!canKillMachineWithBlobWorkers(machineId, kt, &kt)) {
+				TraceEvent("CanKillMachineWithBlobWorkers")
+				    .detail("MachineId", machineId)
+				    .detail("KillType", kt)
+				    .detail("OrigKillType", ktOrig);
+			}
+
 			std::vector<ProcessInfo*> processesLeft, processesDead;
 			int protectedWorker = 0, unavailable = 0, excluded = 0, cleared = 0;
 
