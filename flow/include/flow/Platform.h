@@ -191,7 +191,7 @@ void waitThread(THREAD_HANDLE thread);
 // Linux-only for now.  Set thread priority.
 void setThreadPriority(int pri);
 
-#define DEBUG_DETERMINISM 0
+#define DEBUG_DETERMINISM 1
 
 std::string removeWhitespace(const std::string& t);
 
