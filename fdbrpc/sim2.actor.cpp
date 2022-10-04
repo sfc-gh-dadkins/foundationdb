@@ -1726,42 +1726,6 @@ public:
 		}
 	}
 
-	void delayProcess(ProcessInfo* process) override {
-		if (!FLOW_KNOBS->ENABLE_SIMULATION_IMPROVEMENTS || true) {
-			return;
-		}
-		if (process->isMachineProcess() || process->startingClass == ProcessClass::TesterClass ||
-		    process != currentProcess || process->buggifyDelayCount > 7)
-			return;
-
-		static constexpr double poissonProbs[8] = { 0.3679, 0.3679, 0.1839, 0.0613, 0.0153, 0.0031, 0.0005, 0.0001 };
-		double prob = poissonProbs[process->buggifyDelayCount];
-
-		if (deterministicRandom()->random01() < prob) {
-			double delaySec = deterministicRandom()->random01() * 1.0;
-			TraceEvent("ProcessDelayed")
-			    .detail("ProcessUID", process->uid)
-			    .detail("ProcessInfo", process->toString())
-			    .detail("DelayFor", delaySec)
-			    .detail("DelayCount", process->buggifyDelayCount);
-
-			{
-				MutexHolder holder(mutex);
-				decltype(tasks) newTasks;
-				while (!tasks.empty()) {
-					Task t = tasks.top();
-					tasks.pop();
-					if (t.machine == process) {
-						t.time += delaySec;
-					}
-					newTasks.push(std::move(t));
-				}
-				std::swap(tasks, newTasks);
-				process->buggifyDelayCount++;
-			}
-		}
-	}
-
 	void killProcess(ProcessInfo* machine, KillType kt) override {
 		TraceEvent("AttemptingKillProcess").detail("ProcessInfo", machine->toString());
 		// Refuse to kill a protected process.
@@ -2334,7 +2298,6 @@ public:
 
 			this->currentProcess = t.machine;
 			try {
-				delayProcess(t.machine);
 				t.action.send(Void());
 				ASSERT(this->currentProcess == t.machine);
 			} catch (Error& e) {
