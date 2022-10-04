@@ -229,11 +229,11 @@ struct Sim2Conn final : IConnection, ReferenceCounted<Sim2Conn> {
 		                                      FLOW_KNOBS->MAX_CLOGGING_LATENCY * deterministicRandom()->random01());
 		sendBufSize = std::max<double>(deterministicRandom()->randomInt(0, 5000000), 25e6 * (latency + .002));
 		// options like clogging or bitsflip are disabled for stable connections
-		stableConnection = std::any_of(process->children.begin(),
-		                               process->children.end(),
+		stableConnection = std::any_of(process->childs.begin(),
+		                               process->childs.end(),
 		                               [&](ISimulator::ProcessInfo* child) { return child && child == peerProcess; }) ||
-		                   std::any_of(peerProcess->children.begin(),
-		                               peerProcess->children.end(),
+		                   std::any_of(peerProcess->childs.begin(),
+		                               peerProcess->childs.end(),
 		                               [&](ISimulator::ProcessInfo* child) { return child && child == process; });
 
 		TraceEvent("Sim2Connection")
@@ -434,7 +434,7 @@ private:
 	}
 
 	void rollRandomClose() {
-		// make sure connections between parenta and their children are not closed
+		// make sure connections between parenta and their childs are not closed
 		if (!stableConnection &&
 		    now() - g_simulator->lastConnectionFailure > g_simulator->connectionFailuresDisableDuration &&
 		    deterministicRandom()->random01() < .00001) {
@@ -1725,7 +1725,6 @@ public:
 				doReboot(deterministicRandom()->randomChoice(processes), RebootProcess);
 		}
 	}
-
 	void killProcess(ProcessInfo* machine, KillType kt) override {
 		TraceEvent("AttemptingKillProcess").detail("ProcessInfo", machine->toString());
 		// Refuse to kill a protected process.
@@ -2620,7 +2619,7 @@ ACTOR void doReboot(ISimulator::ProcessInfo* p, ISimulator::KillType kt) {
 		} else if (p->isSpawnedKVProcess()) {
 			TraceEvent(SevDebug, "DoRebootFailed").detail("Name", p->name).detail("Address", p->address);
 			return;
-		} else if (p->getChildren().size()) {
+		} else if (p->getChilds().size()) {
 			TraceEvent(SevDebug, "DoRebootFailedOnParentProcess").detail("Address", p->address);
 			return;
 		}
