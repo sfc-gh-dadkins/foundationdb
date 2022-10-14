@@ -7998,42 +7998,73 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 		state Reference<ILogSystem::IPeekCursor> cursor = data->logCursor;
 
 		wait(cursor->getMore());
-
 		// Skip over any data prior to the initial restored version
 		while (cursor->version().version <= data->initialRestoredVersion) {
+			printf("Reading old message on tag %s, next possible version %s\n", data->tag.toString().c_str(), cursor->version().toString().c_str());
 			if (cursor->hasMessage()) {
-				cursor->getMessage();
 
+				// Can't call both getMessage and reader() on same cursor because they both consume the message so clone
+				auto c1 = cursor->cloneNoMore();
+				StringRef msgWithTags = c1->getMessageWithTags();
+				printf("  Cursor has message at version %s tags ", cursor->version().toString().c_str());
+				for (auto& tag : c1->getTags()) {
+					printf("%s ", tag.toString().c_str());
+				}
+				printf("\n");
+				printf("    RawMessageBytes: %s\n", msgWithTags.toHexString().c_str());
+
+				// Now read the original cursor with reader() and deserialize everything in it
 				auto& cloneReader = *cursor->reader();
+				printf("    First reader byte 0x%02x, remaining byte count %ld\n",
+				       (int)*(uint8_t*)cloneReader.peekBytes(1),
+				       cloneReader.remainingBytes());
+
+				// The Reader contains not just the current raw message bytes byte bytes for the subsequent messages
+				// as well so printing it may be useful but it is very verbose, it just shrinks a bit each time.
+				// printf("    ReaderBytes: %s\n",
+				//        StringRef((uint8_t*)cloneReader.peekBytes(cloneReader.remainingBytes()),
+				//                  cloneReader.remainingBytes())
+				//            .toHexString()
+				//            .c_str());
+
+				// Even though we technically do not know the log protocol at this cursor's read position because
+				// it may not be the same as data->logProtocol, we've only added to the possible next-objects over
+				// time with unique first bytes so removing the has* checks here should be valid and allow us to
+				// parse all messages from the cursor's history before the StoragerServer initial restored version.
 				if (LogProtocolMessage::isNextIn(cloneReader)) {
+					printf("LogProtocolMessage\n");
 					LogProtocolMessage lpm;
 					cloneReader >> lpm;
 					cursor->setProtocolVersion(cloneReader.protocolVersion());
-				} else if (cloneReader.protocolVersion().hasSpanContext() &&
-						SpanContextMessage::isNextIn(cloneReader)) {
+					printf("LogProtocolMessage protocol %llx\n", cloneReader.protocolVersion().version());
+				} else if (/* cloneReader.protocolVersion().hasSpanContext() && */
+				           SpanContextMessage::isNextIn(cloneReader)) {
+					printf("SpanContextMessage\n");
 					SpanContextMessage scm;
 					cloneReader >> scm;
-				} else if (cloneReader.protocolVersion().hasOTELSpanContext() &&
-						OTELSpanContextMessage::isNextIn(cloneReader)) {
+				} else if (/* cloneReader.protocolVersion().hasOTELSpanContext() && */
+				           OTELSpanContextMessage::isNextIn(cloneReader)) {
+					printf("OTELSpanContextMessage\n");
 					OTELSpanContextMessage scm;
 					cloneReader >> scm;
-				} else if (cloneReader.protocolVersion().hasEncryptionAtRest() &&
-						EncryptedMutationMessage::isNextIn(cloneReader)) {
+				} else if (/* cloneReader.protocolVersion().hasEncryptionAtRest() && */
+				           EncryptedMutationMessage::isNextIn(cloneReader)) {
+					printf("EncryptedMutationMessage\n");
 					EncryptedMutationMessage emm;
 					cloneReader >> emm;
 				} else {
+					printf("MutationRef\n");
 					MutationRef msg;
 					cloneReader >> msg;
 				}
 
 				cursor->nextMessage();
 			} else {
+				printf("Waiting\n");
 				wait(cursor->getMore());
-				if (!cursor->hasMessage()) {
-					break;
-				}
 			}
 		}
+		printf("Done with early scan, final version %s\n", cursor->version().toString().c_str());
 
 		state double beforeTLogCursorReads = now();
 		loop {
