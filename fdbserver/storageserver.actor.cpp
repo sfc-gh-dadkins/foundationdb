@@ -7998,23 +7998,40 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 		state Reference<ILogSystem::IPeekCursor> cursor = data->logCursor;
 
 		wait(cursor->getMore());
+		// We have to set a log protocol but it shouldn't actually matter because the parsing logic below will support
+		// the union of all objects in the stream that could exist at any version
+		cursor->setProtocolVersion(data->logProtocol);
+
 		// Skip over any data prior to the initial restored version
 		while (cursor->version().version <= data->initialRestoredVersion) {
 			printf("Reading old message on tag %s, next possible version %s\n", data->tag.toString().c_str(), cursor->version().toString().c_str());
 			if (cursor->hasMessage()) {
+				// If the actual message version is > initialRestoredVersion then stop this scan
+				if(cursor->version().version > data->initialRestoredVersion) {
+					break;
+				}
 
-				// Can't call both getMessage and reader() on same cursor because they both consume the message so clone
-				auto c1 = cursor->cloneNoMore();
-				StringRef msgWithTags = c1->getMessageWithTags();
+				// getMessage(), getMessageWithTags(), and reader() each will consume from the cursor
+				// This is a chance that this message is after the initial restored version so we must be careful
+				// to NOT consume it from cursor, so we will clone the cursor to inspect its contents.
+				auto c = cursor->cloneNoMore();
+				c->setProtocolVersion(data->logProtocol);  // Just in case
+
+				StringRef msgWithTags = c->getMessageWithTags();
 				printf("  Cursor has message at version %s tags ", cursor->version().toString().c_str());
-				for (auto& tag : c1->getTags()) {
+				for (auto& tag : c->getTags()) {
 					printf("%s ", tag.toString().c_str());
 				}
 				printf("\n");
 				printf("    RawMessageBytes: %s\n", msgWithTags.toHexString().c_str());
 
+				// Clone the cursor again so we can inspect its contents in a different way, since we can't call two of the consuming read functions
+				// on the same cursor for the same message.
+				c = cursor->cloneNoMore();
+				c->setProtocolVersion(data->logProtocol);  // Just in case
+
 				// Now read the original cursor with reader() and deserialize everything in it
-				auto& cloneReader = *cursor->reader();
+				auto& cloneReader = *c->reader();
 				printf("    First reader byte 0x%02x, remaining byte count %ld\n",
 				       (int)*(uint8_t*)cloneReader.peekBytes(1),
 				       cloneReader.remainingBytes());
@@ -8035,7 +8052,7 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 					printf("LogProtocolMessage\n");
 					LogProtocolMessage lpm;
 					cloneReader >> lpm;
-					cursor->setProtocolVersion(cloneReader.protocolVersion());
+					c->setProtocolVersion(cloneReader.protocolVersion());
 					printf("LogProtocolMessage protocol %llx\n", cloneReader.protocolVersion().version());
 				} else if (/* cloneReader.protocolVersion().hasSpanContext() && */
 				           SpanContextMessage::isNextIn(cloneReader)) {
@@ -8062,6 +8079,7 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 			} else {
 				printf("Waiting\n");
 				wait(cursor->getMore());
+				cursor->setProtocolVersion(data->logProtocol);
 			}
 		}
 		printf("Done with early scan, final version %s\n", cursor->version().toString().c_str());
