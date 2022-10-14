@@ -962,6 +962,9 @@ public:
 	                                      // when the disk permits
 	NotifiedVersion oldestVersion; // See also storageVersion()
 	NotifiedVersion durableVersion; // At least this version will be readable from storage after a power failure
+	// Initial restored or created durable version on disk
+	Version initialRestoredVersion;
+
 	Version rebootAfterDurableVersion;
 	int8_t primaryLocality;
 	NotifiedVersion knownCommittedVersion;
@@ -7994,6 +7997,44 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 
 		state Reference<ILogSystem::IPeekCursor> cursor = data->logCursor;
 
+		wait(cursor->getMore());
+
+		// Skip over any data prior to the initial restored version
+		while (cursor->version().version <= data->initialRestoredVersion) {
+			if (cursor->hasMessage()) {
+				cursor->getMessage();
+
+				auto& cloneReader = *cursor->reader();
+				if (LogProtocolMessage::isNextIn(cloneReader)) {
+					LogProtocolMessage lpm;
+					cloneReader >> lpm;
+					cursor->setProtocolVersion(cloneReader.protocolVersion());
+				} else if (cloneReader.protocolVersion().hasSpanContext() &&
+						SpanContextMessage::isNextIn(cloneReader)) {
+					SpanContextMessage scm;
+					cloneReader >> scm;
+				} else if (cloneReader.protocolVersion().hasOTELSpanContext() &&
+						OTELSpanContextMessage::isNextIn(cloneReader)) {
+					OTELSpanContextMessage scm;
+					cloneReader >> scm;
+				} else if (cloneReader.protocolVersion().hasEncryptionAtRest() &&
+						EncryptedMutationMessage::isNextIn(cloneReader)) {
+					EncryptedMutationMessage emm;
+					cloneReader >> emm;
+				} else {
+					MutationRef msg;
+					cloneReader >> msg;
+				}
+
+				cursor->nextMessage();
+			} else {
+				wait(cursor->getMore());
+				if (!cursor->hasMessage()) {
+					break;
+				}
+			}
+		}
+
 		state double beforeTLogCursorReads = now();
 		loop {
 			wait(cursor->getMore());
@@ -8830,7 +8871,11 @@ ACTOR Future<Void> updateStorage(StorageServer* data) {
 		// loaded.
 		state double beforeSSDurableVersionUpdate = now();
 		wait(data->durableVersionLock.take());
-		data->popVersion(data->durableVersion.get() + 1);
+
+		// Only pop from logs later in the test after speedup is set
+		if (g_network->isSimulated() && g_simulator.speedUpSimulation) {
+			data->popVersion(data->durableVersion.get() + 1);
+		}
 
 		while (!changeDurableVersion(data, newOldestVersion)) {
 			if (g_network->check_yield(TaskPriority::UpdateStorage)) {
@@ -8876,6 +8921,8 @@ void StorageServerDisk::makeNewStorageServerDurable(const bool shardAware) {
 	storage->set(
 	    KeyValueRef(persistClusterIdKey, BinaryWriter::toValue(data->clusterId.getFuture().get(), Unversioned())));
 	storage->set(KeyValueRef(persistVersion, BinaryWriter::toValue(data->version.get(), Unversioned())));
+	// Set initial restored version for new storage
+	data->initialRestoredVersion = data->version.get();
 
 	if (shardAware) {
 		storage->set(KeyValueRef(persistStorageServerShardKeys.begin.toString(),
@@ -9328,6 +9375,8 @@ ACTOR Future<bool> restoreDurableState(StorageServer* data, IKeyValueStore* stor
 	}
 
 	state Version version = BinaryReader::fromStringRef<Version>(fVersion.get().get(), Unversioned());
+	// Set initial restored version for recovered storage
+	data->initialRestoredVersion = version;
 	debug_checkRestoredVersion(data->thisServerID, version, "StorageServer");
 	data->setInitialVersion(version);
 	data->bytesRestored += fVersion.get().expectedSize();
@@ -10123,9 +10172,19 @@ ACTOR Future<Void> storageServerCore(StorageServer* self, StorageServerInterface
 						if (self->db->get().logSystemConfig.recoveredAt.present()) {
 							self->poppedAllAfter = self->db->get().logSystemConfig.recoveredAt.get();
 						}
-						self->logCursor = self->logSystem->peekSingle(
-						    self->thisServerID, self->version.get() + 1, self->tag, self->history);
-						self->popVersion(self->durableVersion.get() + 1, true);
+
+						// For the first read, start reading from 0 and do not pop anything
+						if (!self->logCursor.isValid()) {
+							self->logCursor =
+							    self->logSystem->peekSingle(self->thisServerID, 1, self->tag, self->history);
+						} else {
+							self->logCursor = self->logSystem->peekSingle(
+							    self->thisServerID, self->version.get() + 1, self->tag, self->history);
+
+							// Only pop to the initial startup version so that everything read while we're alive
+							// will be read again, probably from tlog spill space after, our next startup
+							self->popVersion(self->initialRestoredVersion, true);
+						}
 					}
 					// If update() is waiting for results from the tlog, it might never get them, so needs to be
 					// cancelled.  But if it is waiting later, cancelling it could cause problems (e.g. fetchKeys
