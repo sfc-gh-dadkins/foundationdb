@@ -7996,6 +7996,7 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 		}
 
 		state Reference<ILogSystem::IPeekCursor> cursor = data->logCursor;
+		state ProtocolVersion logProtocolVersion;
 
 		wait(cursor->getMore());
 		// We have to set a log protocol but it shouldn't actually matter because the parsing logic below will support
@@ -8005,6 +8006,10 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 		// Skip over any data prior to the initial restored version
 		while (cursor->version().version <= data->initialRestoredVersion) {
 			printf("Reading old message on tag %s, next possible version %s\n", data->tag.toString().c_str(), cursor->version().toString().c_str());
+			if (cursor->popped()) {
+				printf("Popped at %lld, advancing to %lld\n", cursor->popped(), cursor->popped() + 1);
+				cursor->advanceTo(LogMessageVersion(cursor->popped() + 1));
+			}
 			if (cursor->hasMessage()) {
 				// If the actual message version is > initialRestoredVersion then stop this scan
 				if(cursor->version().version > data->initialRestoredVersion) {
@@ -8031,7 +8036,7 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 				c->setProtocolVersion(data->logProtocol);  // Just in case
 
 				// Now read the original cursor with reader() and deserialize everything in it
-				auto& cloneReader = *c->reader();
+				auto& cloneReader = *cursor->reader();
 				printf("    First reader byte 0x%02x, remaining byte count %ld\n",
 				       (int)*(uint8_t*)cloneReader.peekBytes(1),
 				       cloneReader.remainingBytes());
@@ -8052,11 +8057,12 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 					printf("LogProtocolMessage\n");
 					LogProtocolMessage lpm;
 					cloneReader >> lpm;
-					c->setProtocolVersion(cloneReader.protocolVersion());
+					logProtocolVersion = cloneReader.protocolVersion();
+					cursor->setProtocolVersion(cloneReader.protocolVersion());
 					printf("LogProtocolMessage protocol %llx\n", cloneReader.protocolVersion().version());
 				} else if (/* cloneReader.protocolVersion().hasSpanContext() && */
 				           SpanContextMessage::isNextIn(cloneReader)) {
-					printf("SpanContextMessage\n");
+					printf("SpanContextMessage protocol %llx\n", cloneReader.protocolVersion().version());
 					SpanContextMessage scm;
 					cloneReader >> scm;
 				} else if (/* cloneReader.protocolVersion().hasOTELSpanContext() && */
@@ -8077,12 +8083,12 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 
 				cursor->nextMessage();
 			} else {
-				printf("Waiting\n");
+				printf("Waiting... protocol -> %llx\n", logProtocolVersion);
 				wait(cursor->getMore());
-				cursor->setProtocolVersion(data->logProtocol);
+				cursor->setProtocolVersion(logProtocolVersion);
 			}
 		}
-		printf("Done with early scan, final version %s\n", cursor->version().toString().c_str());
+		//printf("Done with early scan, final version %s\n", cursor->version().toString().c_str());
 
 		state double beforeTLogCursorReads = now();
 		loop {

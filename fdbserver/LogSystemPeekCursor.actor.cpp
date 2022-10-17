@@ -124,6 +124,7 @@ void ILogSystem::ServerPeekCursor::nextMessage() {
 		Version ver;
 		rd >> dummy >> ver;
 
+		//printf("SPC: dummy %d, ver %ld\n", (int)dummy, (long)ver);
 		//TraceEvent("SPC_ProcessSeq", randomID).detail("MessageVersion", messageVersion.toString()).detail("Ver", ver).detail("Tag", tag.toString());
 		// ASSERT( ver >= messageVersion.version );
 

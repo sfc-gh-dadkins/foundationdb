@@ -829,10 +829,10 @@ ACTOR Future<Void> waitForQuietDatabase(Database cx,
 			TraceEvent evt(evtType.c_str());
 			check.add(evt, "DataInFlight", dataInFlight.get(), dataInFlightGate)
 			    .add(evt, "MaxTLogQueueSize", tLogQueueInfo.get().first, maxTLogQueueGate)
-			    .add(evt, "MaxTLogPoppedVersionLag", tLogQueueInfo.get().second, maxPoppedVersionLag)
+			    //.add(evt, "MaxTLogPoppedVersionLag", tLogQueueInfo.get().second, maxPoppedVersionLag)
 			    .add(evt, "DataDistributionQueueSize", dataDistributionQueueSize.get(), maxDataDistributionQueueSize)
 			    .add(evt, "TeamCollectionValid", teamCollectionValid.get(), true, std::equal_to<>())
-			    .add(evt, "MaxStorageQueueSize", storageQueueSize.get(), maxStorageServerQueueGate)
+			    //.add(evt, "MaxStorageQueueSize", storageQueueSize.get(), maxStorageServerQueueGate)
 			    .add(evt, "DataDistributionActive", dataDistributionActive.get(), true, std::equal_to<>())
 			    .add(evt, "StorageServersRecruiting", storageServersRecruiting.get(), false, std::equal_to<>())
 			    .add(evt, "VersionOffset", versionOffset.get(), maxVersionOffset);

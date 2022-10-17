@@ -654,6 +654,9 @@ public:
 	const void* readBytes(int bytes) {
 		const char* b = begin;
 		const char* e = b + bytes;
+		if (e > end) {
+			printf("0x%p + %d -> 0x%p > 0x%p\n", b, bytes, e, end);
+		}
 		ASSERT(e <= end);
 		begin = e;
 		return b;

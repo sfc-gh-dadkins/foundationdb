@@ -175,6 +175,7 @@ struct TagsAndMessage {
 		*rd >> messageLength >> sub >> tagCount;
 		if (messageVersionSub)
 			*messageVersionSub = sub;
+		if ((int)sub < 0) printf("loadFromArean: len=%d sub=%d tags=%d\n", (int)messageLength, (int)sub, (int)tagCount);
 		tags = VectorRef<Tag>((Tag*)rd->readBytes(tagCount * sizeof(Tag)), tagCount);
 		const int32_t rawLength = messageLength + sizeof(messageLength);
 		rd->rewind();
